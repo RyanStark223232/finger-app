@@ -53,7 +53,7 @@ class App extends React.Component {
       startAt: Date.now(),
       dead_frame: 0,
       ctx: null,
-      raw: false,
+      raw: true,
       facingMode: "user",
     };
     this.webcamRef = React.createRef(null);
@@ -419,11 +419,14 @@ class App extends React.Component {
   }
 
   async runHandpose() {
+    const ctx = this.canvasRef.current.getContext("2d");
+    writeText(ctx, { text: 'Loading', x: 180, y: 70 });
     require('@tensorflow/tfjs-backend-webgl');
+    const net = await handpose.load();
+    ctx.clearRect(0,0, this.canvasRef.current.width, this.canvasRef.current.height);
     //const uploadJSONInput = document.getElementById('upload-json');
     //const uploadWeightsInput = document.getElementById('upload-weights');
     //const model = await tf.loadLayersModel(tf.io.browserFiles([uploadJSONInput.files[0], uploadWeightsInput.files[0]]));
-    const net = await handpose.load();
     console.log("Handpose model loaded.");
     this.setState({startAt:Date.now()});
     const Interval_ID = setInterval(() => {
@@ -481,8 +484,17 @@ class App extends React.Component {
               this.setState({pawn_dist_array:[...this.state.pawn_dist_array, pawn_dist]});
               this.setState({dist_array:[...this.state.dist_array, index_dist]});
               this.setState({dist_time_array:[...this.state.dist_time_array, current_moment]});
-              if (index_dist >= 0.51){this.setState({index_passed:1})}
-              if (index_dist < 0.49 && this.state.index_passed === 1){
+              let threshold = 0.51;
+              /*
+              if (this.state.dist_array.length > 20){
+                let j = 1;
+                let avg = 0.0;
+                for (j = 1; j <= 20; j++) avg += this.state.dist_array[this.state.dist_array.length - j];
+                threshold = avg/40.0 + threshold/2.0;
+                console.log(threshold);
+              }*/
+              if (index_dist >= (threshold + 0.01)){this.setState({index_passed:1})}
+              if (index_dist < (threshold - 0.01) && this.state.index_passed === 1){
                 this.setState({index_passed:0});
                 this.setState({tap_count:[...this.state.tap_count, current_moment]});
               }
@@ -552,21 +564,15 @@ class App extends React.Component {
 
   async record_video(){
     this.setState({startAt:Date.now()});
-    let count = 0;
-    require('@tensorflow/tfjs-backend-webgl');
-    const net = await handpose.load();
-    const ctx = this.canvasRef.current.getContext("2d");
-    this.setState({ctx:ctx});
     console.log("Handpose model loaded.");
     const Interval_ID = setInterval(() => {
-      this.concat_frame(count, net, ctx);
-      count = (count + 1)%20;
+      this.concat_frame();
     }, 50);
     this.setState({ID:Interval_ID});
     this.setState({recording:true});
   }
 
-  async concat_frame(count, net, ctx) {
+  async concat_frame() {
     if (this.state.wait){
       this.setState({wait_till:Date.now()+3000});
       //await this.sleep(3000);
@@ -580,17 +586,17 @@ class App extends React.Component {
       if (Date.now() < this.state.wait_till){
         console.log("Waiting till ", this.state.wait_till);
         //count down 3, 2, 1
-        ctx.clearRect(0,0, this.canvasRef.current.width, this.canvasRef.current.height);
+        const ctx = this.canvasRef.current.getContext("2d");
         if (this.state.wait_till - Date.now() < 1000) writeText(ctx, { text: '1', x: 180, y: 70 });
         else if (this.state.wait_till - Date.now() < 2000) writeText(ctx, { text: '2', x: 180, y: 70 });
         else if (this.state.wait_till - Date.now() < 3000) writeText(ctx, { text: '3', x: 180, y: 70 });
         
       }
       else {
-        ctx.clearRect(0,0, this.canvasRef.current.width, this.canvasRef.current.height);
         let current_moment = (Date.now() - this.state.startAt)/1000;
         const image = this.webcamRef.current.getScreenshot();      
         var img = document.createElement("img");
+        img.src = image;
         img.onload = function(){
           if (this.state.finger_done === false){
             this.setState({dist_record:[...this.state.dist_record, img]});
@@ -606,24 +612,8 @@ class App extends React.Component {
             this.setState({fist_record:[...this.state.fist_record, img]});
             this.setState({fist_time_record:[...this.state.fist_time_record, current_moment]});
           }
-
-          if (count === 0) this.record_estimateHands(img, net, ctx);
         }.bind(this)
-        img.src = image;
       }
-    }
-  }
-
-  record_estimateHands = async(img, net, ctx) =>{
-    const hand = await net.estimateHands(img);
-    console.log(hand);
-    if (hand.length > 0) {
-      //drawHand(hand, ctx);   
-      this.setState({dead_frame: 0});
-    }
-    else {
-      if (this.state.dead_frame === 1) writeText(ctx, { text: 'Hand Off Screen', x: 180, y: 70 })
-      this.setState({dead_frame: 1});
     }
   }
 
@@ -638,14 +628,23 @@ class App extends React.Component {
       if (hand.length > 0){
         hand.forEach((prediction) => {
           const landmarks = prediction.landmarks
-          let pawn_dist = this.norm(landmarks[0], landmarks[2]);
+          let pawn_dist = this.norm(landmarks[0], landmarks[17]);
           let index_dist = this.norm(landmarks[4], landmarks[8]);
           index_dist = index_dist/pawn_dist
+          let threshold = 0.51;
+          /*
+          if (this.state.dist_array.length > 20){
+            let j = 1;
+            let avg = 0.0;
+            for (j = 1; j <= 20; j++) avg += this.state.dist_array[this.state.dist_array.length - j];
+            threshold = avg/40.0 + threshold/2.0;
+            console.log(threshold);
+          }*/
           this.setState({pawn_dist_array:[...this.state.pawn_dist_array, pawn_dist]});
           this.setState({dist_array:[...this.state.dist_array, index_dist]});
           this.setState({dist_time_array:[...this.state.dist_time_array, this.state.dist_time_record[i]]});
-          if (index_dist >= 0.5){this.setState({index_passed:1})}
-          if (index_dist < 0.5 && this.state.index_passed === 1){
+          if (index_dist >= (threshold + 0.01)){this.setState({index_passed:1})}
+          if (index_dist < (threshold - 0.01) && this.state.index_passed === 1){
             this.setState({index_passed:0});
             this.setState({tap_count:[...this.state.tap_count, this.state.dist_time_record[i]]});
           }
@@ -660,7 +659,7 @@ class App extends React.Component {
       if (hand.length > 0){
         hand.forEach((prediction) => {
           const landmarks = prediction.landmarks
-          let pawn_dist = this.norm(landmarks[0], landmarks[2]);
+          let pawn_dist = this.norm(landmarks[0], landmarks[17]);
           let rotate_dist = (landmarks[2][0] - landmarks[17][0]) / pawn_dist;
           this.setState({pawn_rotate_array:[...this.state.pawn_rotate_array, pawn_dist]});
           this.setState({rotate_array:[...this.state.rotate_array, rotate_dist]});
@@ -687,7 +686,7 @@ class App extends React.Component {
       if (hand.length > 0){
         hand.forEach((prediction) => {
           const landmarks = prediction.landmarks
-          let pawn_dist = this.norm(landmarks[0], landmarks[2]);
+          let pawn_dist = this.norm(landmarks[0], landmarks[17]);
           let fist_dist =  ((landmarks[8][1] - landmarks[5][1])+
             (landmarks[12][1] - landmarks[9][1])+
             (landmarks[16][1] - landmarks[13][1])+
@@ -717,6 +716,8 @@ class App extends React.Component {
       fist_done:false});
     this.compose_chart();
   }
+
+  
 
   render(){
     const videoConstraints = {
